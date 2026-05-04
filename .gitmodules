@@ -1,0 +1,3 @@
+[submodule "external/HighwayEnv"]
+	path = external/HighwayEnv
+	url = https://github.com/ayushagrawal149/HighwayEnv.git
