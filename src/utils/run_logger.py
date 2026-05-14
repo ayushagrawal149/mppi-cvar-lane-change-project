@@ -32,6 +32,8 @@ class RunLogger:
         seed: int = 0,
         extra: dict | None = None,
         capture_rollout_at_step: int = 20,
+        lane_centers: list[float] | None = None,
+        lane_width: float = 4.0,
     ):
         self.scenario = scenario
         self.dt = float(dt)
@@ -40,6 +42,15 @@ class RunLogger:
         self.seed = int(seed)
         self.extra = dict(extra or {})
         self.capture_rollout_at_step = int(capture_rollout_at_step)
+        # HighwayEnv defaults: 3 lanes at y = 0, 4, 8 with width 4 m. Drivers
+        # should pass actual values read from the env so the plots match the
+        # simulator faithfully.
+        self.lane_centers = (
+            [float(y) for y in lane_centers]
+            if lane_centers is not None
+            else [0.0, 4.0, 8.0]
+        )
+        self.lane_width = float(lane_width)
 
         self.t: list[float] = []
         self.ego: list[np.ndarray] = []

@@ -86,6 +86,8 @@ def run(
         target_lane = origin_lane
     origin_y = target_lane_y(env, origin_lane)
     target_y = target_lane_y(env, target_lane)
+    lanes_count = int(env.unwrapped.config["lanes_count"])
+    lane_centers = [target_lane_y(env, i) for i in range(lanes_count)]
     dt = 1.0 / float(env.unwrapped.config["policy_frequency"])
     rh.policy_dt = dt
 
@@ -104,6 +106,7 @@ def run(
         target_y=target_y,
         origin_y=origin_y,
         seed=seed,
+        lane_centers=lane_centers,
         extra={
             "origin_lane_index": origin_lane,
             "target_lane_index": target_lane,
