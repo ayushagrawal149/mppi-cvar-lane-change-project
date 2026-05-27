@@ -1,0 +1,251 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%2345678901234567890123456789012345678901234567890123456789012345678901234567890
+%        1         2         3         4         5         6         7         8
+
+\documentclass[letterpaper, 10 pt, conference]{ieeeconf}  % Comment this line out if you need a4paper
+
+%\documentclass[a4paper, 10pt, conference]{ieeeconf}      % Use this line for a4 paper
+
+\IEEEoverridecommandlockouts                              % This command is only needed if
+                                                          % you want to use the \thanks command
+
+\overrideIEEEmargins                                      % Needed to meet printer requirements.
+
+
+\input{usepackage}
+% Packages required for the appendix notation table.
+\usepackage{longtable}
+\usepackage{array}
+%In case you encounter the following error:
+%Error 1010 The PDF file may be corrupt (unable to open PDF file) OR
+%Error 1000 An error occurred while parsing a contents stream. Unable to analyze the PDF file.
+%This is a known problem with pdfLaTeX conversion filter. The file cannot be opened with acrobat reader
+%Please use one of the alternatives below to circumvent this error by uncommenting one or the other
+%\pdfobjcompresslevel=0
+%\pdfminorversion=4
+
+% See the \addtolength command later in the file to balance the column lengths
+% on the last page of the document
+
+% The following packages can be found on http:\\www.ctan.org
+%\usepackage{graphics} % for pdf, bitmapped graphics files
+%\usepackage{epsfig} % for postscript graphics files
+%\usepackage{mathptmx} % assumes new font selection scheme installed
+%\usepackage{times} % assumes new font selection scheme installed
+%\usepackage{amsmath} % assumes amsmath package installed
+%\usepackage{amssymb}  % assumes amsmath package installed
+
+\title{\LARGE \bf
+Week 3: Modeling \& Sketch of Method --- CVaR-MPPI for Highway Lane-Change Planning}
+
+
+\author{ \parbox{4 in}{\centering Ayush Agrawal\\ UID: 306184708}
+\thanks{UCLA ECE M237 Spring 2026 Course Project Milestone Reports. Week 3---Modeling \& Sketch of Method.}
+}
+
+\begin{document}
+
+
+
+\maketitle
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{Project Title}
+\noindent CVaR-MPPI for Highway Lane-Change Planning.
+
+\section{Main Idea}
+A risk-sensitive lane-change planner that augments Model Predictive Path Integral (MPPI) with a Conditional Value-at-Risk (CVaR) objective, replacing the risk-neutral expectation over rollouts with a sampled tail-risk backup so the controller suppresses lane-changes that are efficient on average but unsafe under rare traffic outcomes.
+
+\section{Problem Formulation}
+Let $x_k\!\in\!\mathbb{R}^{n_x}$ be the joint ego--traffic state, $u_k\!=\!v_k\!+\!\epsilon_k\!\in\!\mathbb{R}^{n_u}$ the perturbed ego control with $\epsilon_k\!\sim\!\mathcal{N}(0,\Sigma_\epsilon)$, and $w_k$ exogenous traffic noise. The simulated stochastic dynamics $\tilde{x}_{k+1}\!=\!\tilde{F}(\tilde{x}_k,u_k,w_k)$ form an unbiased estimate of the nominal $x_{k+1}\!=\!F(x_k,u_k)$~\cite{ramppi}. Over a horizon $K$ with state cost $q$, terminal cost $\phi$, and risk cost $L(\tilde{x})\!=\!\sum_{k=0}^{K-1}\ell(\tilde{x}_k)$, we seek
+\begin{equation}\label{eq:obj}
+\min_{v}\,\mathbb{E}\!\left[\phi(x_K)\!+\!\sum_{k=0}^{K-1}\!\Big(q(x_k)\!+\!\tfrac{\lambda}{2}v_k^{\!\top}\Sigma_\epsilon^{-1}v_k\Big)\right]\;\;\text{s.t.}\;\;\mathrm{CVaR}_\alpha\!(L(\tilde{x}))\!\le\!C_u,
+\end{equation}
+where $\mathrm{CVaR}_\alpha(L)\!=\!\mathbb{E}[L\,|\,L\!\ge\!\mathrm{VaR}_\alpha(L)]$ is the conditional expectation of the worst $1\!-\!\alpha$ tail~\cite{rockafellar}, $\alpha\!\in\!(0,1)$ the confidence level, $\lambda\!>\!0$ the inverse temperature, and $C_u$ caps the admissible tail risk.
+
+\section{Sketch of Method}
+\subsection{Offline Component}
+The offline stage instantiates the dynamic-programming foundation of CVaR control by Chow et al.~\cite{chow_cvarmdp}. Augmenting the state with a confidence variable $y\!\in\!(0,1]$, the CVaR-MDP value $V^{*}(x,y)\!=\!\min_{\mu}\mathrm{CVaR}_y\!\big(\sum_{t}\gamma^{t}Z_t\,|\,x_0\!=\!x,\mu\big)$ admits a $\gamma$-contractive, concavity-preserving Bellman recursion $\mathbf{T}[V](x,y)\!=\!\min_a[c(x,a)\!+\!\gamma\max_{\xi\in\mathcal{U}_{\mathrm{CVaR}}(y,P)}\sum_{x'}\xi(x')V(x',y\xi(x'))P(x'|x,a)]$~\cite{chow_cvarmdp}. We discretise a coarse three-lane MDP over (lane index, gap-to-lead, ego speed) on $\sim\!10^{3}$ cells with $21$ log-spaced confidence points and run interpolated value iteration (Algorithm~1 of \cite{chow_cvarmdp}) to obtain $V^{*}(x,y)$, which is loaded as the MPPI terminal cost $\phi(x_K)\!\leftarrow\!V^{*}(x_K,\alpha)$ to provide a tail-risk--shaped cost-to-go beyond the rollout horizon. Offline complexity is $\mathcal{O}(|\mathcal{X}|\,|\mathcal{Y}|\,|\mathcal{A}|\,n_{\mathrm{iter}})$, paid once before deployment; runtime queries are linear-interpolation lookups in microseconds.
+
+\subsection{Online Component}
+The online stage executes a Risk-Aware MPPI receding-horizon controller~\cite{mppi,ramppi}. At each step we sample $M$ control sequences $u_k^{m}\!=\!v_k\!+\!\epsilon_k^{m}$, propagate $K$-step rollouts under the nominal bicycle to accumulate $S_m$, and for each $m$ simulate $N$ stochastic traffic futures via $\tilde F$ to compute the Monte-Carlo CVaR estimate
+\begin{equation}\label{eq:cvar_mc}
+\widehat{\mathrm{CVaR}}_\alpha^{m}=\tfrac{1}{N_o}\!\sum_{n=0}^{N-1}\!\mathbf{1}_{\{L(\tilde{x}^{m,n})\ge\widehat{\mathrm{VaR}}_\alpha^{m}\}}L(\tilde{x}^{m,n}),
+\end{equation}
+the Rockafellar--Uryasev sample estimator~\cite{rockafellar,ramppi}. The penalty is folded into a modified rollout cost $\tilde{S}_m\!=\!A\widehat{\mathrm{CVaR}}_\alpha^{m}\mathbf{1}_{\{\widehat{\mathrm{CVaR}}_\alpha^{m}>C_u\}}\!+\!S_m$, importance weights $\tilde{\omega}_m\!=\!\exp(-(\tilde{S}_m\!-\!\min_m\tilde{S}_m)/\lambda)$ are formed, and the mean control is updated as $v^{+}\!=\!\sum_m\tilde{\omega}_m u^{m}/\sum_m\tilde{\omega}_m$; the first input $v^{+}_0$ is applied and $v\!\leftarrow\!v^{+}$ warm-starts the next step. This stage is suitable because GPU-parallel rollouts handle the continuous nonlinear bicycle within the $\sim\!100$\,ms control budget, and Monte-Carlo CVaR accommodates arbitrary, non-Gaussian traffic disturbances. It complements the offline stage by injecting fine-grained interaction with current surrounding vehicles that the coarse $V^{*}$ cannot resolve, while $V^{*}$ supplies the long-horizon CVaR-Bellman backup that a finite-$K$ rollout would otherwise miss.
+
+\section{Working Example Modeling}
+\subsection{Modeling \& Simulation}
+The ego vehicle uses a 4-state kinematic bicycle, $\dot{X}\!=\!v\cos\psi$, $\dot{Y}\!=\!v\sin\psi$, $\dot\psi\!=\!\tfrac{v}{L}\tan\delta$, $\dot v\!=\!a$, with controls $u\!=\!(a,\delta)$ and wheelbase $L$. The environment is a three-lane straight highway populated by $4$--$10$ surrounding vehicles whose longitudinal motion follows a stochastic Intelligent Driver Model with Gaussian acceleration noise $w_k\!\sim\!\mathcal{N}(0,\sigma^{2})$ and a $2\%$ random lane-change probability per step, providing the rare-but-significant tail events that motivate a CVaR objective. The state cost $q(x)$ combines a smooth collision potential, a lane-tracking term, a desired-speed term, and an effort penalty; the running risk cost $\ell(\tilde{x}_k)$ is a time-to-collision-shaped potential plus a lateral-encroachment indicator, so high-CVaR rollouts coincide with the near-miss outcomes the planner must avoid.
+
+\subsection{Plan for Implementation}
+\begin{enumerate}
+\item \textbf{Simulation environment.} The three-lane highway simulator is built by subclassing \texttt{HighwayEnv} from the Farama Foundation \texttt{highway-env} package~\cite{highwayenv} and registered as \texttt{CVaRLaneChange-v0}. The package's built-in road network, kinematic-bicycle ego model with continuous controls $u\!=\!(a,\delta)$, and IDM/MOBIL traffic provide a validated baseline; we override the default IDM longitudinal controller to inject Gaussian acceleration noise $w_k\!\sim\!\mathcal{N}(0,\sigma^{2})$ and add a $2\%$ per-step random lane-change probability for surrounding vehicles, producing the rare-but-significant tail events that motivate the CVaR objective.
+\item \textbf{Online controller.} Implement RA-MPPI in Python using JAX \texttt{vmap}/\texttt{jit} for parallel GPU rollouts; target $M\!=\!1024$ control samples, $N\!=\!64$ disturbance futures per sample, $K\!=\!30$, $\Delta t\!=\!50$\,ms.
+\item \textbf{Offline solver.} Implement the interpolated CVaR-Bellman operator of~\cite{chow_cvarmdp} in NumPy on a coarse $\sim\!10^{3}$-cell three-lane MDP with $21$ log-spaced confidence points; cache $V^{*}(x,y)$ to disk and query at runtime by linear interpolation.
+\item \textbf{Baselines and ablations.} Compare vanilla MPPI~\cite{mppi}, RA-MPPI~\cite{ramppi}, and the proposed CVaR-MPPI (with offline $V^{*}$); ablate over $\alpha\!\in\![0.7,0.99]$, $C_u$, the CVaR penalty weight $A$, and the variance scaling $B$.
+\item \textbf{Scenario suite.} Sweep low/medium/high traffic density and inject deterministic near-miss scripts (hard-brake of the lead vehicle, aggressive cut-in into the target lane).
+\item \textbf{Metrics.} Collision rate, near-miss rate (TTC$<\!1.5$\,s), lane-change completion time, control smoothness ($\|\Delta u\|^{2}$), and per-step compute latency, averaged over $\ge\!200$ episodes per condition with fixed seeds.
+\item \textbf{Reproducibility.} \texttt{highway-env} is pinned as a git submodule with an editable install; offline value table, hyperparameters, and random seeds are versioned alongside the controller code.
+\end{enumerate}
+
+\appendix
+\section{Notation Table}
+The following table compiles every mathematical symbol introduced in this report along with its definition under the problem setup and its physical significance for highway lane-change planning.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{0.22\textwidth}|>{\raggedright\arraybackslash}p{0.34\textwidth}|>{\raggedright\arraybackslash}p{0.36\textwidth}|}
+\hline
+\textbf{Symbol} & \textbf{Definition (problem setup)} & \textbf{Physical significance} \\
+\hline
+\endfirsthead
+\hline
+\textbf{Symbol} & \textbf{Definition (problem setup)} & \textbf{Physical significance} \\
+\hline
+\endhead
+\hline
+\multicolumn{3}{|l|}{\textit{State, control, and dynamics}} \\
+\hline
+$x_k\!\in\!\mathbb{R}^{n_x}$ & Joint ego--traffic state at discrete time $k$ & Concatenation of ego pose $(X,Y,\psi,v)$ and surrounding-vehicle states; full quantity the planner conditions on \\
+\hline
+$\tilde{x}_k$ & Disturbed (stochastic) state under $\tilde F$ & Trajectory realisation when traffic uncertainty $w_k$ is sampled \\
+\hline
+$u_k\!=\!v_k\!+\!\epsilon_k\!\in\!\mathbb{R}^{n_u}$ & Perturbed ego control applied to the bicycle & Acceleration and steering actually commanded on a Monte-Carlo rollout \\
+\hline
+$v_k$ & Mean (nominal) control sequence & Current MPPI best guess, refined every receding-horizon step \\
+\hline
+$\epsilon_k\!\sim\!\mathcal{N}(0,\Sigma_\epsilon)$ & Gaussian exploration noise injected by MPPI & Drives stochastic sampling of control sequences in the path-integral framework \\
+\hline
+$\Sigma_\epsilon$ & Covariance of control perturbation & Sets MPPI exploration aggressiveness; wider $\Sigma_\epsilon$ explores more candidates \\
+\hline
+$w_k$ & Exogenous traffic disturbance & Surrounding-vehicle acceleration noise and random lane changes \\
+\hline
+$F(x_k,u_k)$ & Nominal deterministic discrete-time dynamics & Idealised bicycle + IDM evolution used inside MPPI cost rollouts \\
+\hline
+$\tilde{F}(\tilde{x}_k,u_k,w_k)$ & Stochastic dynamics, unbiased estimate of $F$ & Used inside the inner Monte-Carlo loop to evaluate tail risk under realistic traffic randomness \\
+\hline
+$n_x,\,n_u$ & State and control dimensions & Set the size of the per-rollout linear-algebra workload \\
+\hline
+$K$ & Receding-horizon planning length & Number of timesteps the planner looks ahead each iteration \\
+\hline
+$\Delta t$ & Control timestep ($50$~ms) & Sets the planner update rate ($\approx\!20$~Hz) \\
+\hline
+\multicolumn{3}{|l|}{\textit{Costs and penalties}} \\
+\hline
+$q(x_k)$ & State running cost & Smooth collision potential, lane-tracking, speed-tracking, and effort penalty \\
+\hline
+$\phi(x_K)$ & Terminal cost & Cost-to-go beyond the rollout horizon; set to $V^{*}(x_K,\alpha)$ \\
+\hline
+$\ell(\tilde{x}_k)$ & Stage risk cost & TTC-shaped potential plus lateral-encroachment indicator; flags near-miss outcomes \\
+\hline
+$L(\tilde{x})\!=\!\sum_{k=0}^{K-1}\ell(\tilde{x}_k)$ & Total risk cost over a rollout & Random variable whose tail behaviour the CVaR objective constrains \\
+\hline
+$\tfrac{\lambda}{2}v_k^{\!\top}\Sigma_\epsilon^{-1}v_k$ & Quadratic control-energy regulariser & Standard MPPI control cost arising from the path-integral derivation \\
+\hline
+$S_m$ & Nominal MPPI cost of $m$-th rollout & Sum of running and terminal cost along a deterministic rollout \\
+\hline
+$\tilde{S}_m$ & CVaR-augmented rollout cost & $S_m$ plus tail-risk penalty $A\widehat{\mathrm{CVaR}}_\alpha^{m}\mathbf{1}_{\{\cdot>C_u\}}$ \\
+\hline
+$c(x,a)$ & Stage cost in offline MDP & Coarse-grid analogue of $q$ used inside the CVaR-MDP \\
+\hline
+$Z_t$ & Stage-wise random cost in MDP & Cost realisation accumulated over the discounted horizon for offline DP \\
+\hline
+\multicolumn{3}{|l|}{\textit{CVaR and risk quantities}} \\
+\hline
+$\alpha\!\in\!(0,1)$ & CVaR confidence level & Tail mass defining the worst $1\!-\!\alpha$ outcomes; tunes risk aversion \\
+\hline
+$\mathrm{VaR}_\alpha(L)\!=\!\min\{t:\mathbb{P}(L\!\le\!t)\!\ge\!\alpha\}$ & $\alpha$-quantile of the rollout cost distribution & Cost level only exceeded with probability $1\!-\!\alpha$; threshold defining the tail \\
+\hline
+$\mathrm{CVaR}_\alpha(L)\!=\!\mathbb{E}[L\,|\,L\!\ge\!\mathrm{VaR}_\alpha(L)]$ & Conditional expectation in the worst $1\!-\!\alpha$ tail & Average severity of catastrophic events; the quantity the planner must bound \\
+\hline
+$\widehat{\mathrm{VaR}}_\alpha^{m}$ & Empirical $\alpha$-quantile from the $N$ disturbance rollouts of sample $m$ & Sample threshold separating ``tail'' rollouts from the rest \\
+\hline
+$\widehat{\mathrm{CVaR}}_\alpha^{m}$ & Monte-Carlo CVaR estimator on rollout $m$ & GPU-parallel surrogate for the tail-risk constraint \\
+\hline
+$C_u$ & Upper bound on admissible CVaR & Operator-defined safety budget --- soft cap on average tail severity \\
+\hline
+$A$ & CVaR penalty weight & Sets how aggressively rollout cost is inflated when $C_u$ is breached \\
+\hline
+$N_o$ & Number of $N$ rollouts with $L\!\ge\!\widehat{\mathrm{VaR}}_\alpha^{m}$ & Sample size of the empirical tail used in the CVaR average \\
+\hline
+\multicolumn{3}{|l|}{\textit{Offline dynamic-programming quantities (Chow et al.~2015)}} \\
+\hline
+$y\!\in\!(0,1]$ & Augmented confidence-level state & Tracks remaining tail budget along the trajectory; makes CVaR Markovian \\
+\hline
+$V^{*}(x,y)$ & Optimal CVaR-MDP value, $\min_\mu\mathrm{CVaR}_y(\sum_t\gamma^{t}Z_t\!\mid\!x_0\!=\!x,\mu)$ & Best achievable tail cost from $x$ at confidence $y$; supplies horizon-extending terminal value \\
+\hline
+$\mathbf{T}[V](x,y)$ & CVaR Bellman operator & $\gamma$-contractive, concavity-preserving DP backup; theoretical engine of offline solver \\
+\hline
+$\xi\!\in\!\mathcal{U}_{\mathrm{CVaR}}(y,P)$ & Risk-envelope perturbation density (dual representation of CVaR) & Adversary distribution within the budget; links risk-sensitivity to robustness against modelling error \\
+\hline
+$\mathcal{U}_{\mathrm{CVaR}}(y,P)$ & $\{\xi:0\!\le\!\xi\!\le\!1/y,\;\mathbb{E}_P[\xi]\!=\!1\}$ & Bounded adversarial reweighting consistent with confidence $y$ \\
+\hline
+$P(x'|x,a)$ & MDP transition kernel & Coarse traffic-flow model used by the offline solver \\
+\hline
+$\gamma$ & Discount factor & Trades short- vs.\ long-term risk; ensures contraction of $\mathbf{T}$ \\
+\hline
+$\mu\!\in\!\Pi_H$ & History-dependent policy & Decision rule; collapses to Markovian on augmented $(x,y)$ space \\
+\hline
+$a\!\in\!\mathcal{A}$ & Discrete action & Coarse-grained ego intent (lane, throttle bin) at the offline level \\
+\hline
+$|\mathcal{X}|,|\mathcal{Y}|,|\mathcal{A}|,n_{\mathrm{iter}}$ & State grid ($\sim\!10^{3}$), confidence grid ($21$), action set, VI iterations & Determine offline runtime $\mathcal{O}(|\mathcal{X}|\,|\mathcal{Y}|\,|\mathcal{A}|\,n_{\mathrm{iter}})$ \\
+\hline
+\multicolumn{3}{|l|}{\textit{Online MPPI sampling quantities}} \\
+\hline
+$M$ & Number of perturbed control sequences sampled per step ($1024$) & Outer Monte-Carlo budget; controls quality of the importance-sampled control update \\
+\hline
+$N$ & Number of stochastic traffic futures per control sample ($64$) & Inner Monte-Carlo budget for each $\widehat{\mathrm{CVaR}}_\alpha^{m}$ estimate \\
+\hline
+$u_k^{m},\,\epsilon_k^{m}$ & $m$-th sampled control / noise realisation & One concrete perturbed candidate trajectory considered this control step \\
+\hline
+$\tilde{x}^{m,n}$ & $n$-th disturbance rollout under control $u^{m}$ & A single realised traffic future used to score risk \\
+\hline
+$\tilde{\omega}_m\!=\!\exp(-(\tilde{S}_m\!-\!\min_m\tilde{S}_m)/\lambda)$ & Path-integral importance weight & Softmax-style preference for low-cost rollouts; the $-\min$ shift prevents overflow \\
+\hline
+$v^{+}\!=\!\sum_m\tilde{\omega}_m u^{m}/\sum_m\tilde{\omega}_m$ & Updated mean control sequence & Importance-weighted average of all sampled candidates --- the new MPPI policy \\
+\hline
+$v_0^{+}$ & First entry of $v^{+}$ & Actually commanded to the actuators this step \\
+\hline
+$\lambda\!>\!0$ & MPPI inverse temperature & Sharpens / softens the weight distribution; ties to noise--control coupling in the path-integral derivation \\
+\hline
+\multicolumn{3}{|l|}{\textit{Working-example (vehicle and environment) quantities}} \\
+\hline
+$X,Y$ & Ego centre-of-mass position (longitudinal, lateral) & Inertial-frame coordinates on the highway \\
+\hline
+$\psi$ & Ego heading (yaw) angle & Couples lateral motion to forward speed \\
+\hline
+$v$ (state) & Ego forward speed & Appears in both kinematics and the speed-tracking cost \\
+\hline
+$a$ (control) & Acceleration command & First control channel; bounded to realistic vehicle limits \\
+\hline
+$\delta$ & Steering-angle command & Second control channel; provides lateral controllability \\
+\hline
+$L$ (wheelbase) & Bicycle wheelbase & Geometric parameter linking $\delta$ to yaw rate via $\dot{\psi}\!=\!v\tan\delta/L$ \\
+\hline
+$N_{\mathrm{tr}}\!=\!4\text{--}10$ & Number of surrounding vehicles & Sets the traffic-density regime swept in experiments \\
+\hline
+$\sigma^{2}$ & Variance of stochastic-IDM acceleration noise & Magnitude of routine driver variability \\
+\hline
+$2\%$ lane-change probability & Per-step random lane-switch event & Models rare aggressive cut-ins --- the heavy-tail event class CVaR is meant to catch \\
+\hline
+$\ell_{\mathrm{des}},\,v_{\mathrm{des}}$ & Desired lane index and cruise speed & Performance targets entering $q(x)$ \\
+\hline
+$c_1,c_2,c_3$ & Cost-component weights & Trade off safety, lane-keeping, and speed-tracking inside $q(x)$ \\
+\hline
+$q_{\mathrm{coll}}(x)$ & Smooth collision potential & Differentiable surrogate for the discrete collision set; drives MPPI's gradient-free avoidance \\
+\hline
+TTC & Time-to-collision (gap / closing speed) & Used both as the running-risk-cost shape and as an experimental safety metric (TTC$<\!1.5$~s) \\
+\hline
+\end{longtable}
+
+\begin{thebibliography}{9}
+\bibitem{mppi} G.~Williams, A.~Aldrich, E.~A.~Theodorou, ``Model predictive path integral control: From theory to parallel computation,'' \emph{J.~Guid.~Control Dyn.}, vol.~40, no.~2, pp.~344--357, 2017.
+\bibitem{rockafellar} R.~T.~Rockafellar, S.~Uryasev, ``Optimization of conditional value-at-risk,'' \emph{J.~Risk}, vol.~2, no.~3, pp.~21--41, 2000.
+\bibitem{chow_ghav} Y.~Chow, M.~Ghavamzadeh, ``Algorithms for CVaR optimization in MDPs,'' in \emph{NeurIPS}, vol.~27, 2014.
+\bibitem{chow_cvarmdp} Y.~Chow, A.~Tamar, S.~Mannor, M.~Pavone, ``Risk-sensitive and robust decision-making: a CVaR optimization approach,'' in \emph{NeurIPS}, vol.~28, 2015.
+\bibitem{ramppi} J.~Yin, Z.~Zhang, P.~Tsiotras, ``Risk-aware model predictive path integral control using conditional value-at-risk,'' arXiv:2209.12842, 2022.
+\bibitem{highwayenv} E.~Leurent, ``An environment for autonomous driving decision-making,'' \texttt{github.com/Farama-Foundation/HighwayEnv}, 2018.
+\end{thebibliography}
+
+
+
+\end{document}
