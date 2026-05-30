@@ -6,4 +6,5 @@ venv/
 .ipynb_checkpoints/
 *.egg-info/
 .DS_Store
+sim_output/
 
