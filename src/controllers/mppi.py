@@ -33,9 +33,9 @@ class MPPIConfig:
     horizon: int = 30
     n_samples: int = 256
     dt: float = 0.05
-    temperature: float = 1.0
-    sigma_a: float = 1.5
-    sigma_delta: float = 0.08
+    temperature: float = 2.0  #1.0 -> 5.0
+    sigma_a: float = 0.6      #1.5 -> 0.6
+    sigma_delta: float = 0.03 #0.08 -> 0.03
     a_bounds: Tuple[float, float] = (-5.0, 5.0)
     delta_bounds: Tuple[float, float] = (-0.4, 0.4)
     target_y: float = 0.0

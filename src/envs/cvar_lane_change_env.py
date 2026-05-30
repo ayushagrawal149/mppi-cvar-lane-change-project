@@ -27,7 +27,7 @@ class CVaRLaneChangeEnv(HighwayEnv):
                 "lanes_count": 3,
                 "vehicles_count": 10,
                 "controlled_vehicles": 1,
-                "duration": 40,
+                "duration": 120,
                 "policy_frequency": 20,
                 "simulation_frequency": 100,
                 "ego_spacing": 2,

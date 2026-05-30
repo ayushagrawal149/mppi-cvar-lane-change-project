@@ -245,7 +245,7 @@ $$
 Other cars create sharp, non-convex, even discontinuous cost walls. MPPI never
 differentiates the cost (it only evaluates $S_m$), so collision indicators and hard
 constraints are admissible. It is **embarrassingly parallel** — thousands of rollouts on a
-GPU — meeting the $\sim$100 ms control budget. The smooth Gaussian collision potential in
+GPU — meeting the $\simeq 100$ ms control budget. The smooth Gaussian collision potential in
 `step_cost` ensures even crash-free rollouts feel a gradient pulling the weighted average
 away from danger.
 
