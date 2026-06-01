@@ -41,6 +41,9 @@ class MPPIConfig:
     target_y: float = 0.0
     v_desired: float = 25.0
     seed: int = 0
+    w_jerk: float = 0.5
+    w_steerrate: float = 100.0
+    max_drate: float = 0.8   # rad/s — caps |a_y_ramp| ≈ ½·v·max_drate to ≤ 1 g at v=25 m/s
 
 
 class MPPI:
@@ -48,9 +51,11 @@ class MPPI:
         self.cfg = config
         self.rng = np.random.default_rng(config.seed)
         self.v = np.zeros((config.horizon, 2), dtype=np.float64)
+        self.u_prev = np.zeros(2, dtype=np.float64)
 
     def reset(self) -> None:
         self.v[:] = 0.0
+        self.u_prev[:] = 0.0  
 
     def _sample_noise(self) -> np.ndarray:
         eps = self.rng.normal(
@@ -65,6 +70,16 @@ class MPPI:
         d_lo, d_hi = self.cfg.delta_bounds
         U[..., 0] = np.clip(U[..., 0], a_lo, a_hi)
         U[..., 1] = np.clip(U[..., 1], d_lo, d_hi)
+        # Hard slew-rate cap on steering, anchored to the last applied control.
+        # Models the front-wheel actuator's mechanical limit; unlike the soft
+        # w_steerrate penalty (which competes against collision pressure), this
+        # is a physical bound MPPI cannot trade off.
+        if self.cfg.max_drate > 0.0:
+            step = self.cfg.max_drate * self.cfg.dt   # max |Δδ| per dt
+            prev = np.full(U.shape[0], self.u_prev[1])
+            for k in range(U.shape[1]):
+                U[:, k, 1] = np.clip(U[:, k, 1], prev - step, prev + step)
+                prev = U[:, k, 1]
         return U
 
     def _rollout_cost(
@@ -84,6 +99,16 @@ class MPPI:
                 target_y=self.cfg.target_y,
                 v_desired=self.cfg.v_desired,
             )
+        
+        # Control-rate / jerk penalty: differences between consecutive controls in
+        # the sampled sequence, with self.u_prev as the "step -1" baseline so the
+        # very first commanded change is also penalized.
+        u_prev_b = np.broadcast_to(self.u_prev, (M, 1, 2))
+        U_aug = np.concatenate([u_prev_b, U], axis=1)           # (M, K+1, 2)
+        dU = np.diff(U_aug, axis=1)                              # (M, K, 2)
+        costs += self.cfg.w_jerk      * np.sum(dU[..., 0] ** 2, axis=-1)
+        costs += self.cfg.w_steerrate * np.sum(dU[..., 1] ** 2, axis=-1)
+
         return costs, traj
 
     def step(
@@ -102,6 +127,7 @@ class MPPI:
             w = w / w_sum
         self.v = np.einsum("m,mkj->kj", w, U)
         u0 = self.v[0].copy()
+        self.u_prev = u0.copy()
         self.v[:-1] = self.v[1:]
         self.v[-1] = 0.0
         return u0, {"costs": costs, "weights": w, "traj": traj}

@@ -58,6 +58,8 @@ class RunLogger:
         self.traffic: list[np.ndarray] = []
         self.crashed: bool = False
         self.rollout_snapshot: dict | None = None
+        # Per-step CVaR diagnostics (empty dicts for baseline-MPPI runs).
+        self.diag_steps: list[dict] = []
         self._step: int = 0
 
     def log(
@@ -86,6 +88,23 @@ class RunLogger:
                 "step": int(self._step),
                 "t": float(t),
             }
+        # Per-step CVaR diagnostics. Pulled from rollout_info if the
+        # controller produced them; baseline MPPI has no such keys → empty
+        # dict here, which `to_arrays` drops cleanly.
+        diag: dict[str, float] = {}
+        if rollout_info is not None:
+            if "cvar" in rollout_info:
+                cv = np.asarray(rollout_info["cvar"], dtype=np.float64)
+                diag["cvar_median"] = float(np.median(cv))
+                diag["cvar_p90"]    = float(np.percentile(cv, 90))
+                diag["cvar_max"]    = float(np.max(cv))
+            if "J_C" in rollout_info:
+                jc = np.asarray(rollout_info["J_C"], dtype=np.float64)
+                diag["jc_mean"] = float(jc.mean())
+                diag["jc_max"]  = float(jc.max())
+            if "n_over_budget" in rollout_info:
+                diag["n_over_budget"] = float(rollout_info["n_over_budget"])
+        self.diag_steps.append(diag)
         self._step += 1
 
     def to_arrays(self) -> dict[str, np.ndarray]:
@@ -95,11 +114,21 @@ class RunLogger:
                 "ego": np.zeros((0, 4)),
                 "actions": np.zeros((0, 2)),
             }
-        return {
+        out = {
             "t": np.array(self.t, dtype=np.float64),
             "ego": np.stack(self.ego, axis=0),
             "actions": np.stack(self.actions, axis=0),
         }
+        # CVaR diagnostics: only emitted if the controller logged any
+        # (baseline MPPI runs ⇒ diag_steps is a list of empty dicts ⇒ no keys).
+        diag_keys = set().union(*(d.keys() for d in self.diag_steps)) \
+            if self.diag_steps else set()
+        for k in sorted(diag_keys):
+            out[k] = np.array(
+                [d.get(k, np.nan) for d in self.diag_steps],
+                dtype=np.float64,
+            )
+        return out
 
     def save(
         self,

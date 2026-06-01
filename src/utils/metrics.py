@@ -127,3 +127,25 @@ def compute_metrics(logger) -> dict[str, Any]:
         "steps": int(len(t)),
         "duration_s": float(t[-1] - t[0]) if len(t) > 1 else 0.0,
     }
+
+def aggregate_runs(rows, near_miss_ttc=1.5):
+    """rows: list of per-run summaries from RunLogger.summary().
+
+    Returns dict: collision_rate, near_miss_rate, t_lc_mean, t_lc_std,
+                  a_y_peak_mean, ttc_min_mean.
+    """
+    n = len(rows)
+    if n == 0:
+        return {"n": 0, "collision_rate": float("nan"),
+                "near_miss_rate": float("nan"), "t_lc_mean": float("nan"),
+                "t_lc_std": float("nan"), "a_y_peak_mean": float("nan"),
+                "ttc_min_mean": float("nan")}
+    return {
+        "n": n,
+        "collision_rate": sum(r["crashed"] for r in rows) / n,
+        "near_miss_rate": sum(r["ttc_min"] < near_miss_ttc for r in rows) / n,
+        "t_lc_mean": float(np.nanmean([r["t_lc"] for r in rows])),
+        "t_lc_std":  float(np.nanstd([r["t_lc"] for r in rows])),
+        "a_y_peak_mean": float(np.nanmean([r["a_y_peak"] for r in rows])),
+        "ttc_min_mean": float(np.nanmean([r["ttc_min"] for r in rows])),
+    }

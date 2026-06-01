@@ -1,65 +1,65 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% UCLA ECE M237 Spring 2026 -- Week 6-7 Second Attempt
-% CVaR-MPPI for Highway Lane-Change Planning
-% Strict 1-page limit (IEEEconf, 10pt, two-column).
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%2345678901234567890123456789012345678901234567890123456789012345678901234567890
+%        1         2         3         4         5         6         7         8
 
-\documentclass[letterpaper, 10 pt, conference]{ieeeconf}
+\documentclass[letterpaper, 10 pt, conference]{ieeeconf}  % Comment this line out if you need a4paper
 
-\IEEEoverridecommandlockouts
-\overrideIEEEmargins
+%\documentclass[a4paper, 10pt, conference]{ieeeconf}      % Use this line for a4 paper
 
-\usepackage{amsmath, amssymb}
-\usepackage{booktabs}
+\IEEEoverridecommandlockouts                              % This command is only needed if
+                                                          % you want to use the \thanks command
+
+\overrideIEEEmargins                                      % Needed to meet printer requirements.
+
+
+\input{usepackage}
+% Extra packages required for this milestone (table, figures, hyperlinks).
+% Loaded explicitly so this file compiles even if usepackage.sty does not
+% already pull them in. graphicx is harmless if duplicated.
 \usepackage{graphicx}
-% `subcaption` conflicts with ieeeconf's internal caption handling and yields
-% "Missing number / Illegal unit of measure" errors inside subfigure widths.
-% `subfig` is the historically compatible replacement for IEEE conference
-% classes. caption=false avoids re-loading the caption package.
+\usepackage{booktabs}
 \usepackage[caption=false,font=footnotesize]{subfig}
 \usepackage{hyperref}
 \usepackage{xcolor}
-
-% Centralise the figure search path so the date-stamped folder name does not
-% trip chktex warning 8 on every \includegraphics line. The suppression
-% comment below applies only to this line.
-\graphicspath{{../../sim_output/20260531-192010_hard_brake_GOOD/}} % chktex 8
 \hypersetup{colorlinks=true, urlcolor=blue, linkcolor=black, citecolor=black}
 
-% Tighten lists/floats to keep everything on one page.
-\usepackage{enumitem}
-\setlist{nosep, leftmargin=*}
+% Tighten floats so the 1-page limit holds with table + figure block.
 \setlength{\textfloatsep}{4pt}
 \setlength{\intextsep}{4pt}
 \setlength{\abovecaptionskip}{2pt}
 \setlength{\belowcaptionskip}{0pt}
 
+% Centralise the figure search path so the date-stamped folder name does not
+% trip chktex warning 8 on every \includegraphics line. On Overleaf, upload
+% the six PNGs into submission/week6-7/figs/ and change this to {{figs/}}.
+\graphicspath{{../../sim_output/20260531-192010_hard_brake_GOOD/}} % chktex 8
+
 \title{\LARGE \bf
 Week 6-7 Second Attempt: CVaR-MPPI for Highway Lane-Change Planning}
 
+
 \author{\parbox{4 in}{\centering Ayush Agrawal\\ UID: 306184708}
-\thanks{UCLA ECE M237 Spring 2026 Course Project Milestone Reports. Week 6-7 Second Attempt.}}
+\thanks{UCLA ECE M237 Spring 2026 Course Project Milestone Reports. Week 6-7 Second Attempt.}
+}
 
 \begin{document}
+
+
+
 \maketitle
 
-%---------------------------------------------------------------------------
-\section{Summary of Initial Idea and Results}
+\section{Summary of your initial idea and results}
 I augment Model Predictive Path Integral (MPPI)~\cite{mppi} with a Conditional Value-at-Risk (CVaR)~\cite{rockafellar} objective. The goal is to suppress maneuvers that are efficient on average but unsafe under rare traffic outcomes. The constrained problem is $\min_{v}\mathbb{E}[\phi(x_K)+\sum_{k}(q(x_k)+\tfrac{\lambda}{2}v_k^{\!\top}\Sigma_\epsilon^{-1}v_k)]$ s.t.\ $\mathrm{CVaR}_\alpha(L(\tilde x))\!\le\!C_u$. I decompose it into two stages. Offline, a CVaR-MDP value iteration~\cite{chow_cvarmdp} supplies a tail-risk-shaped terminal cost $V^{*}(x,y)$. Online, a Risk-Aware MPPI~\cite{ramppi} enforces the tail constraint via a per-rollout Monte-Carlo CVaR penalty. Week-4 results reported a tuned \emph{risk-neutral} MPPI baseline in HighwayEnv~\cite{highwayenv}. The baseline avoided crashes on benign traffic. It still violated comfort and safety limits with large $|a_y|$ and low $\mathrm{TTC}$. These violations motivate the CVaR objective.
 
-%---------------------------------------------------------------------------
-\section{Summary of Feedback from Peer Reviews and Grade}
+\section{Summary of feedback from peer reviews and grade}
 The peer reviewer raised five concerns. (i) State the novelty more sharply relative to RA-MPPI~\cite{ramppi}. (ii) Tighten scope by prioritising the online CVaR-MPPI; defer the offline $V^{*}$ as a stretch goal. (iii) Define $L(\tilde x)$, the empirical $\widehat{\mathrm{VaR}}/\widehat{\mathrm{CVaR}}$ estimator, the number $N$ of disturbance rollouts, and the penalty weight $A$ explicitly. (iv) Clarify whether the traffic predictor is interactive or exogenous. (v) Add a clean ablation between risk-neutral MPPI, online CVaR-MPPI, and CVaR-MPPI with $V^{*}$ terminal. Example-side comments asked for multi-agent reactive scenarios and a richer multi-seed metric set (collision rate, near-miss rate, $\mathrm{TTC}_{\min}$, $|a_y|$, $|j_y|$, $T_{LC}$, success rate). A notation inconsistency ($M\!=\!128$ vs $M\!=\!256$) was also flagged. The Gradescope grade reinforced the central message. Stress-test the controller. Design experiments that prove the value of the CVaR penalty.
 
-%---------------------------------------------------------------------------
-\section{Updated Method}
+\section{Updated method}
 I adopted the reviewer's focused scope and implemented \textbf{Track~A}: the online CVaR-MPPI of~\cite{ramppi}. Offline $V^{*}$ is deferred. The controller subclasses the risk-neutral MPPI sampler. It modifies only the cost aggregator. For each of $M\!=\!256$ sampled control sequences $u^{m}$, the planner draws $N\!=\!24$ disturbed traffic futures via $\tilde F$. $\tilde F$ is the constant-velocity nominal plus zero-mean Gaussian acceleration noise $\sigma_a\!=\!1.5\,\mathrm{m/s^2}$, so $\mathbb{E}_w[\tilde F]\!=\!F$. I then evaluate the trajectory risk $L^{m,n}\!=\!\sum_{k}\ell(\tilde x^{m,n}_k)$. The Lagrangian penalty $J_C^{m}\!=\!A\,\widehat{\mathrm{CVaR}}_\alpha(L^{m,*})\,\mathbf{1}\{\widehat{\mathrm{CVaR}}_\alpha\!>\!C_u\}$ is added before the softmin, with defaults $\alpha\!=\!0.9$, $C_u\!=\!4.0$, $A\!=\!80$. $\widehat{\mathrm{CVaR}}_\alpha$ is the tail-average estimator over the worst $\lceil N(1\!-\!\alpha)\rceil$ samples~\cite{rockafellar}. The risk cost $\ell(\tilde x)$ is an explicit TTC-shortfall potential plus a lateral-encroachment indicator. It is distinct from the task cost $q$. The traffic predictor $\tilde F$ is exogenous (independent of $u^{m}$), matching~\cite{ramppi}. The $M\!=\!128/256$ inconsistency is resolved (unified $M\!=\!256$).
 
-%---------------------------------------------------------------------------
-\section{Updated Working Example}
+\section{Updated working example}
 I replaced the single-episode Week-4 test with a paired-seed head-to-head between risk-neutral MPPI and CVaR-MPPI\@. The harness covers three scenarios. A hard-brake leader at $-10\,\mathrm{m/s^2}$ with $8\,\mathrm{m}$ headway. An aggressive cut-in. A natural lane change. Each scenario runs over $\ge\!20$ seeds. I report collision rate, near-miss rate ($\mathrm{TTC}\!<\!1.5\,\mathrm{s}$), $\mathrm{TTC}_{\min}$, $|a_y|_{\mathrm{peak}}$, $|j_y|_{\mathrm{peak}}$, $T_{LC}$, and $e_{y,\mathrm{RMS}}$. The hard-brake case is a two-lane shift (lane~$2\!\to\!$lane~$0$) executed simultaneously with the leader's emergency brake. This setup is designed expressly to surface the tail-risk failures the reviewer and Gradescope feedback asked me to stress-test.
 
-%---------------------------------------------------------------------------
 \section{Results}
 After tuning (Table~\ref{tab:updates}), the risk-neutral MPPI baseline \emph{completes the harder stress test without collision} ($160$ steps, $7.95\,\mathrm{s}$ simulated, seed 3; video: \href{https://drive.google.com/REPLACE-WITH-YOUR-LINK}{run.gif}). The achieved maneuver still exceeds the comfort and safety thresholds. Specifically, $|a_y|_{\mathrm{peak}}\!=\!23.3\,\mathrm{m/s^2}$, $|j_y|_{\mathrm{peak}}\!=\!97.5\,\mathrm{m/s^3}$, $\mathrm{TTC}_{\min}\!=\!0.50\,\mathrm{s}$, and $T_{LC}\!=\!6.45\,\mathrm{s}$. This is exactly the gap CVaR-MPPI is designed to close. The new outcome differs from Week 4 in two ways. First, the baseline now survives a strictly harder scenario. Any improvement attributable to CVaR will therefore not be masked by baseline failure. Second, the full Track-A infrastructure (\texttt{risk.py}, \texttt{cvar.py}, \texttt{stochastic\_idm.py}, \texttt{cvar\_mppi.py}, \texttt{compare\_controllers.py}) is implemented and unit-tested. The paired CVaR-vs-MPPI ablation is queued.
 
@@ -83,9 +83,6 @@ Samples $M$                      & 128/256 & 256 & resolves notation \\
 \end{tabular}
 \end{table}
 
-% Figures from sim_output/20260531-192010_hard_brake_GOOD/.
-% Path is relative to this .tex file. On Overleaf, upload the PNGs into
-% submission/week6-7/figs/ or adjust \graphicspath{} accordingly.
 \begin{figure*}[!htbp]
 \centering
 \subfloat[Top-down $X$-$Y$ trajectory with traffic snapshots. The ego completes the two-lane shift (lane $2\to$lane $0$) while the leader executes a $-10\,\mathrm{m/s^2}$ brake. The path remains crash free.]{%
@@ -105,11 +102,16 @@ Samples $M$                      & 128/256 & 256 & resolves notation \\
 \caption{Diagnostics for the no-crash hard-brake maneuver of Sec.\,V (seed 3, $160$ steps, $7.95\,\mathrm{s}$). Six panels track trajectory, lateral tracking, ISO comfort, safety (TTC), commanded controls, and the rollout cost distribution.}\label{fig:hard_brake_diagnostics}
 \end{figure*}
 
-%---------------------------------------------------------------------------
 \section{Remaining Steps}
 Three steps remain. (i) Run the 20-seed paired head-to-head (\texttt{compare\_controllers.py}) on \texttt{hard\_brake}, \texttt{cutin}, and \texttt{lane\_change}; tabulate collision and near-miss rates with comfort metrics. (ii) Sweep $(\alpha, C_u, A)$ via \texttt{cvar\_sweep.py} for the safety vs.\ performance frontier. (iii) If time permits, prototype an offline $V^{*}$ on a tiny $|\mathcal{X}|\!\sim\!10^{3}$, $|\mathcal{Y}|\!=\!21$ grid as a third arm of the ablation.
 
-%---------------------------------------------------------------------------
+% --------------------------------------------------------------------------
+% Bibliography. Two options:
+%   (A) inline thebibliography (used below) -- self-contained, no .bib needed.
+%   (B) external .bib via \bibliography{IEEEabrv,references} with
+%       \bibliographystyle{IEEEtran} -- matches the formal template default.
+% Switch to (B) once a references.bib file exists in this folder.
+% --------------------------------------------------------------------------
 \begin{thebibliography}{9}\footnotesize
 \bibitem{mppi} G.~Williams, A.~Aldrich, E.~A.~Theodorou, ``Model predictive path integral control: From theory to parallel computation,'' \emph{J.~Guid.\ Control Dyn.}, 40(2):344-357, 2017.
 \bibitem{rockafellar} R.~T.~Rockafellar, S.~Uryasev, ``Optimization of conditional value-at-risk,'' \emph{J.~Risk}, 2(3):21-41, 2000.
@@ -117,5 +119,7 @@ Three steps remain. (i) Run the 20-seed paired head-to-head (\texttt{compare\_co
 \bibitem{ramppi} J.~Yin, Z.~Zhang, P.~Tsiotras, ``Risk-aware MPPI control using conditional value-at-risk,'' arXiv:2209.12842, 2022.
 \bibitem{highwayenv} E.~Leurent, ``An environment for autonomous driving decision-making,'' \texttt{github.com/Farama-Foundation/HighwayEnv}, 2018.
 \end{thebibliography}
+
+
 
 \end{document}

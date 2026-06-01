@@ -25,13 +25,13 @@ class CVaRLaneChangeEnv(HighwayEnv):
         cfg.update(
             {
                 "lanes_count": 3,
-                "vehicles_count": 10,
+                "vehicles_count": 30,
                 "controlled_vehicles": 1,
                 "duration": 120,
                 "policy_frequency": 20,
                 "simulation_frequency": 100,
-                "ego_spacing": 2,
-                "vehicles_density": 1,
+                "ego_spacing": 1.2,
+                "vehicles_density": 2,
                 "action": {
                     "type": "ContinuousAction",
                     "longitudinal": True,
@@ -39,7 +39,7 @@ class CVaRLaneChangeEnv(HighwayEnv):
                 },
                 "observation": {
                     "type": "Kinematics",
-                    "vehicles_count": 11,
+                    "vehicles_count": 31,
                     "features": ["presence", "x", "y", "vx", "vy", "heading"],
                     "absolute": True,
                     "normalize": False,
