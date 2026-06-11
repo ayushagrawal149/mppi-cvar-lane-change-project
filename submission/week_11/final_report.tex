@@ -1,0 +1,380 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% UCLA ECE M237 Spring 2026 Course Project, Final Report.
+% Ayush Agrawal.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass[letterpaper, 10 pt, conference]{ieeeconf}
+
+\IEEEoverridecommandlockouts
+\overrideIEEEmargins
+
+% Inline packages (week_11 has no usepackage.tex).
+\usepackage{amsmath, amssymb, amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+
+% --- GitHub link macros: search-and-replace these once before submission ---------
+\newcommand{\repoBase}{https://github.com/USERNAME/mppi-cvar-lane-change-project}
+\newcommand{\repolink}[2]{\href{\repoBase/tree/main/#1}{\texttt{#2}}}
+\newcommand{\filelink}[2]{\href{\repoBase/blob/main/#1}{\texttt{#2}}}
+
+\title{\LARGE \bf
+Risk-Aware Highway Lane-Change Planning \\ via Online Soft-Constrained CVaR-MPPI}
+
+\author{ \parbox{3 in}{\centering Ayush Agrawal \\ UID: 306184708 \\ \texttt{ayushagrawal26@g.ucla.edu}}
+\thanks{UCLA ECE M237 Spring 2026 Course Project Final Report. Instructor: Jason J. Choi.
+Code and run artefacts: \href{\repoBase}{\texttt{github.com/USERNAME/mppi-cvar-lane-change-project}}.}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Standard Model Predictive Path Integral (MPPI) control is a sampling-based, online dynamic programming method that approximates the stochastic Hamilton-Jacobi-Bellman value function via path integrals. It is risk-neutral by construction. For highway lane changes the importance-weighted mean hides the tail: a 1-in-256 collision is invisible. This project formulates a CVaR-constrained lane-change problem and solves it with an online soft-constrained CVaR-augmented MPPI controller. The originally proposed hybrid (offline CVaR-MDP value iteration supplying the terminal cost, online MPPI executing the receding-horizon plan) was descoped to the online level only, for the reasons stated in \S\ref{sec:scope}. The deployed controller samples 256 control sequences per step, evaluates each candidate's worst $1{-}\alpha$ tail over 64 disturbed traffic futures, and adds a gated tail-cost penalty to the rollout cost. Evaluated on a HighwayEnv simulator across three scenarios (lane change, cut-in, hard-brake leader), CVaR-MPPI prevents a collision that MPPI fails to avoid ($\mathrm{TTC}_\mathrm{min}$: 0.01\,s to 0.75\,s), reduces lateral RMS by 71\%, and matches MPPI bit-for-bit when no tail is present (an empirically verified no-regret property).
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+\subsection{Motivation}
+
+Autonomous lane changes generate hundreds of safe outcomes per catastrophic one. A risk-neutral planner that averages cost across all of them suppresses precisely the population that matters. Standard MPPI \cite{williams2017mppi} samples $M$ control sequences, weighs them by an exponentiated cost, and applies their mean. The mean is risk-neutral. It cannot see a 1-in-256 collision hidden inside a cloud of routine merges.
+
+The risk-sensitive alternative used in finance and operations research is Conditional Value-at-Risk (CVaR) \cite{rockafellar2000cvar}. CVaR is the expected cost conditioned on lying in the worst $1{-}\alpha$ tail of the cost distribution. Two strands of work apply it to sequential decision making. \textit{Offline} CVaR-MDP methods (\cite{chow2014cvar, chow2015risk}) compute a tail-aware value function $V^*$ via a contractive Bellman backup on an augmented state. \textit{Online} CVaR-MPC methods (\cite{yin2022ra}) estimate CVaR by Monte Carlo at runtime and add it as a rollout penalty. Each strand has a clean failure mode: offline CVaR cannot react to fine-grained traffic interactions, online CVaR has no long-horizon backup beyond its rollout window.
+
+\subsection{Scope Statement}
+\label{sec:scope}
+
+The Week 1 and Week 2 reports for this project committed to both strands: an offline CVaR-MDP value iteration (Chow et al. \cite{chow2015risk}) supplying $V^*(x, y)$ as the MPPI terminal cost, and an online CVaR-MPPI executing the receding-horizon plan. I was \emph{not} able to deliver the offline component within the project window. The reason is concrete: solving the augmented-state Bellman recursion to convergence over the $\sim\!10^3$-cell state grid with 21 confidence points requires a prolonged value-iteration run, and I did not have the compute budget to complete it in time. Rather than report a half-finished offline table, I descoped to the online level only. The substitute is a soft-constrained Lagrangian penalisation of the CVaR constraint, which converts the original constrained optimisation into an unconstrained MPPI cost with a gated tail penalty. This is computationally cheaper, retains the CVaR semantics on the $K$-step horizon, and is what \S\ref{sec:results} actually evaluates. \S\ref{sec:offline_planned} documents the offline design as originally formulated.
+
+\subsection{Novelty and Contributions}
+
+Within that scope, the contributions are:
+
+\begin{itemize}
+    \item \textbf{Online soft-constrained CVaR-MPPI for highway lane change.} A complete CPU implementation that samples 256 control sequences per step, runs 64 disturbed traffic futures per candidate via a stochastic IDM/MOBIL predictor, and adds a gated CVaR tail penalty to the MPPI cost.
+    \item \textbf{A no-regret guarantee.} The gated penalty satisfies $J_C \equiv 0$ when no candidate rollout's tail exceeds the budget $C_u$. The augmented cost is then bit-for-bit identical to the MPPI cost. This is both proven (one line, from the indicator) and verified empirically on the hard-brake scenario.
+    \item \textbf{ISO-grounded multi-axis evaluation.} Seven diagnostic plots per run (trajectory overview, lateral profile, comfort, safety, controls, cost distribution, CVaR activity) covering ISO 11270 (ride comfort) and ISO 17387 (safety), so the result is not a single crash-rate number but a multi-axis vehicle-dynamics audit. All run artefacts are published in the repository for reproducibility.
+\end{itemize}
+
+\section{Related Work}
+
+\textbf{MPPI.} Williams, Aldrich, and Theodorou \cite{williams2017mppi} derived MPPI as the path-integral solution to a stochastic HJB equation, by applying the Feynman-Kac formula to the value function and approximating its softmin form by Monte Carlo sampling. The risk-neutral importance weighting is the artefact we modify.
+
+\textbf{CVaR.} Rockafellar and Uryasev \cite{rockafellar2000cvar} introduced CVaR as a coherent, convex risk measure. They proved the variational identity
+$
+\mathrm{CVaR}_\alpha(Z) = \min_{\nu} \big\{\nu + \tfrac{1}{1-\alpha}\,\mathbb{E}[(Z - \nu)^+]\big\},
+$
+which makes CVaR-constrained optimisation a convex program. The empirical analogue (mean of the top-$(1{-}\alpha)$ samples) is what we evaluate online.
+
+\textbf{CVaR in MDPs.} Chow and Ghavamzadeh \cite{chow2014cvar} derived policy-gradient and actor-critic algorithms for CVaR-constrained MDPs. Chow, Tamar, Mannor, and Pavone \cite{chow2015risk} reframed CVaR control as worst-case expected cost under bounded model perturbation, and constructed a contractive augmented-state Bellman operator whose fixed point is the CVaR value function $V^*(x, y)$ with $y \in [0,1]$ the running confidence. This is the offline DP the project originally targeted.
+
+\textbf{Online CVaR with MPPI.} The most directly relevant prior work is the Risk-Aware MPPI of Yin, Zhang, and Tsiotras \cite{yin2022ra}. They introduced the Monte-Carlo CVaR estimator over disturbed rollouts and the constraint-penalised modified cost that we deploy here. Their evaluation is off-road racing with a track-following objective. The contribution here is scenario-specific: a highway lane-change setting with IDM/MOBIL traffic as the disturbance source $\tilde{F}$.
+
+\section{Problem Formulation}
+\label{sec:problem}
+
+Let $x_k \in \mathbb{R}^{n_x}$ be the joint ego-traffic state, $u_k = v_k + \epsilon_k \in \mathbb{R}^{n_u}$ the perturbed ego control with sampling noise $\epsilon_k \sim \mathcal{N}(0, \Sigma_\epsilon)$, and $w_k$ the exogenous traffic noise. The nominal and stochastic dynamics are
+\begin{align}
+x_{k+1} &= F(x_k, u_k), \\
+\tilde{x}_{k+1} &= \tilde{F}(\tilde{x}_k, u_k, w_k), \quad \mathbb{E}_w[\tilde{F}(\tilde{x}_k, u_k, w_k)] = F(x_k, u_k).
+\end{align}
+The cost decomposes into a state cost $q$, a terminal cost $\phi$, and a separate risk cost $L(\tilde{x}) = \sum_{k=0}^{K-1} \ell(\tilde{x}_k)$ evaluated on the stochastic trajectory. The receding-horizon problem is
+\begin{equation}
+\min_v \; \mathbb{E}\!\left[ \phi(x_K) + \sum_{k=0}^{K-1} \Big( q(x_k) + \tfrac{\lambda}{2} v_k^\top \Sigma_\epsilon^{-1} v_k \Big) \right]
+\label{eq:obj}
+\end{equation}
+subject to
+\begin{equation}
+\mathrm{CVaR}_\alpha\!\big(L(\tilde{x})\big) \le C_u, \quad \mathrm{CVaR}_\alpha(L) = \mathbb{E}[L \mid L \ge \mathrm{VaR}_\alpha(L)]
+\label{eq:cvar}
+\end{equation}
+where $\alpha \in (0,1)$ is the confidence level (the constraint sees the worst $1-\alpha$ tail), $C_u$ is the admissible tail-risk budget, and $\lambda > 0$ is the MPPI temperature. Three knobs jointly decide whether the constraint actively shapes the policy: $\alpha$ (which tail), $C_u$ (the gate threshold), and the IDM disturbance scale $\sigma_a$ (whether the tail has any mass to constrain).
+
+\section{Proposed Method}
+\label{sec:method}
+
+The original method had two coupled levels: an offline CVaR-MDP value iteration computing the terminal cost $\phi$, and an online CVaR-augmented MPPI solving~(\ref{eq:obj})--(\ref{eq:cvar}) by sampling. As declared in \S\ref{sec:scope}, the offline level was descoped. \S\ref{sec:dp_foundation} sets up the shared DP foundation, \S\ref{sec:offline_planned} documents the offline design for the record, and \S\ref{sec:online} describes the soft-constrained online controller that was actually implemented and evaluated.
+
+\subsection{DP Foundation: From HJB to Path Integrals}
+\label{sec:dp_foundation}
+
+For the continuous-time analogue of~(\ref{eq:obj}), the value function $V(x, t)$ satisfies the stochastic HJB equation
+\begin{equation}
+\begin{aligned}
+\partial_t V + \min_v \Big[\, & q(x) + \tfrac{\lambda}{2}\| v \|^2_{\Sigma_\epsilon^{-1}} + (\nabla V)^\top (f(x) + Gv) \\
+& + \tfrac{1}{2}\mathrm{tr}(\Sigma_\epsilon G^\top \nabla^2 V G) \,\Big] = 0.
+\end{aligned}
+\end{equation}
+The Feynman-Kac formula \cite{williams2017mppi} converts this PDE into a path-integral expectation
+\begin{equation}
+V(x, t) = -\lambda \log \mathbb{E}\!\left[ \exp\!\left(-\tfrac{1}{\lambda} S(\tau)\right) \,\big|\, x(t) = x \right]
+\label{eq:fk}
+\end{equation}
+where $S(\tau)$ is the cost along a sample path $\tau$. The optimal control is the importance-weighted mean of sampled control perturbations under weights $\exp(-S/\lambda)$. MPPI is the finite-sample realisation. It is a \textit{sampling-based online DP method}: it does not solve the HJB by grid backup, but by Monte Carlo on its path-integral form.
+
+\subsection{Offline Component (Originally Planned, Descoped)}
+\label{sec:offline_planned}
+
+The Week 1 and Week 2 reports committed to the augmented-state CVaR-MDP construction of Chow et al. \cite{chow2015risk}. Add a confidence variable $y \in [0, 1]$, then the operator
+\begin{equation}
+\begin{aligned}
+\mathbf{T}[V](x, y) = \min_a \Big[\, & c(x, a) \\
+& + \gamma \!\!\max_{\xi \in \mathcal{U}_\mathrm{CVaR}(y, P)} \!\!\sum_{x'} \xi(x') V(x', y\xi(x')) P(x' | x, a) \,\Big]
+\end{aligned}
+\label{eq:bellman}
+\end{equation}
+is $\gamma$-contractive and concavity-preserving in $y$. Its fixed point $V^*(x, y)$ would be loaded as the MPPI terminal cost via $\phi(x_K) \leftarrow V^*(x_K, \alpha)$. The intended discretisation: state $(\text{lane index}, \text{gap-to-lead}, \text{ego speed}) \in \{0,1,2\} \times [0, 60]\,\mathrm{m} \times [10, 35]\,\mathrm{m/s}$ on a $\sim\!10^3$-cell grid, confidence on 21 log-spaced points in $[0.01, 1]$, costs $c$ matching the online risk cost $\ell$.
+
+\textbf{Why this was not delivered.} Each Bellman update~(\ref{eq:bellman}) requires solving an inner risk-envelope LP for the worst-case distribution $\xi$, at every $(x, y)$ cell, at every iteration. With $\sim\!10^3 \times 21 = 2.1 \times 10^4$ cells, three coarse actions, and value iteration to convergence, the total runtime estimate sat in the multi-day range on a single workstation. Within the project window I had access only to a single CPU box (Intel i9-13900KF) shared with the online experiments. I chose not to start a long-running value-iteration job that would have left no time to fix bugs, retune costs, or run the head-to-head experiments. The honest summary: the offline DP is a real algorithm with a real specification, and it remains the recommended next step (\S\ref{sec:conclusion}). It is not part of the results.
+
+\subsection{Online Component: Soft-Constrained CVaR-MPPI}
+\label{sec:online}
+
+The implemented controller treats the CVaR constraint as a Lagrangian-style soft penalty added to the MPPI cost, rather than as a hard feasibility constraint. The resulting optimisation is unconstrained over $v$ and admits the standard MPPI path-integral solution from \S\ref{sec:dp_foundation}. Three modifications to the baseline rollout aggregator:
+
+\textbf{(1) Disturbed predictor.} For each control step, sample $N$ traffic futures $\tilde{x}^{m,n}$ via $\tilde{F}$, a stochastic IDM/MOBIL model with zero-mean Gaussian acceleration noise of scale $\sigma_a$. Zero mean implies $\mathbb{E}_w[\tilde{F}] = F$, so the planner's nominal rollout is the mean of the disturbed cloud.
+
+\textbf{(2) Empirical tail estimate.} For each candidate sequence $m$, accumulate the per-future risk cost $L^{m,n} = \sum_{k=0}^{K-1} \ell(\tilde{x}^{m,n}_k)$, sort, and average the top $1-\alpha$ fraction:
+\begin{equation}
+\widehat{\mathrm{CVaR}}_\alpha^m = \frac{1}{N_o} \sum_{n=0}^{N-1} \mathbf{1}\!\left\{L^{m,n} \ge \widehat{\mathrm{VaR}}_\alpha^m\right\} L(\tilde{x}^{m,n}).
+\label{eq:cvar_hat}
+\end{equation}
+This is the empirical Rockafellar formula. Following \cite{yin2022ra} we apply a variance-scaling factor $B$ to sharpen $\alpha$-sensitivity.
+
+\textbf{(3) Gated soft penalty.} Form the augmented cost
+\begin{equation}
+\tilde{S}_m = S_m + A \cdot \widehat{\mathrm{CVaR}}_\alpha^m \cdot \mathbf{1}\!\left\{\widehat{\mathrm{CVaR}}_\alpha^m > C_u\right\},
+\label{eq:s_tilde}
+\end{equation}
+where $A$ is the penalty magnitude. Softmin weights are then computed on $\tilde{S}_m$. The full per-step loop is Algorithm~\ref{alg:cvar_mppi}.
+
+\begin{algorithm}[t]
+\caption{Online Soft-Constrained CVaR-MPPI Step}
+\label{alg:cvar_mppi}
+\begin{algorithmic}[1]
+\Require state $x_t$, traffic state $x_t^\mathrm{tr}$, warm-started $v$
+\State Sample $\{\epsilon^m\}_{m=1}^M \sim \mathcal{N}(0, \Sigma_\epsilon)$, form $u^m = v + \epsilon^m$
+\State Roll out ego under $F$: $x^m_{0:K}$ and base cost $S_m$
+\State Sample $N$ disturbed traffic futures $\tilde{x}^n_{0:K}$ via $\tilde{F}$
+\For{$m = 1, \dots, M$}
+    \State Accumulate $L^{m,n} = \sum_{k} \ell(\tilde{x}^{m,n}_k)$, $n = 1, \dots, N$
+    \State Compute $\widehat{\mathrm{CVaR}}_\alpha^m$ via Eq.~(\ref{eq:cvar_hat})
+    \State $J_C^m \gets A \cdot \widehat{\mathrm{CVaR}}_\alpha^m \cdot \mathbf{1}\{\widehat{\mathrm{CVaR}}_\alpha^m > C_u\}$
+    \State $\tilde{S}_m \gets S_m + J_C^m$
+\EndFor
+\State $\omega_m \gets \exp(-(\tilde{S}_m - \min_m \tilde{S}_m)/\lambda)$, normalise
+\State $v^+ \gets \sum_m \omega_m u^m / \sum_m \omega_m$
+\State Apply $v_0^+$; shift $v$ for next step
+\State Log $(\max_m \widehat{\mathrm{CVaR}}_\alpha^m,\; |\{m : J_C^m > 0\}|)$ for diagnostics
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Why a soft constraint.} A hard $\mathrm{CVaR}_\alpha(L) \le C_u$ constraint requires a feasibility projection at every step, which in the MPPI sampling framework collapses to "drop infeasible rollouts." With $M = 256$ and a tight $C_u$, the feasible subset can become empty, leaving the planner with no candidates. The soft penalty avoids this failure mode and degrades gracefully: when no rollout is feasible the controller still acts, weighing all candidates by their (penalised) cost.
+
+\subsection{No-Regret Property}
+\label{sec:noregret}
+
+\textbf{Claim.} If $\widehat{\mathrm{CVaR}}_\alpha^m \le C_u$ for every $m$, then $J_C^m \equiv 0$ for every $m$, $\tilde{S}_m = S_m$ bit-for-bit, and the softmin weights, the mean control, and every downstream quantity are identical to those of the MPPI baseline.
+
+\textbf{Proof.} The indicator in~(\ref{eq:s_tilde}) is zero whenever the budget is met, so $J_C^m = 0$ and $\tilde{S}_m = S_m + 0 = S_m$. Every subsequent quantity is a deterministic function of $\{\tilde{S}_m\}$, hence identical. $\square$
+
+The augmentation is therefore strictly additive. It can only diverge from MPPI on rollouts the tail estimator has flagged as risky. We verify the property empirically in \S\ref{sec:cross}.
+
+\subsection{Implementation Details}
+
+The online controller is implemented in pure NumPy (\filelink{src/controllers/cvar_mppi.py}{cvar\_mppi.py}). The disturbed predictor (\filelink{src/traffic/stochastic_idm.py}{stochastic\_idm.py}) draws $n_\mathrm{disturb}$ Gaussian acceleration noise sequences and integrates them with a constant-heading kinematic model. The CVaR estimator (\filelink{src/risk/cvar.py}{cvar.py}) is the sorted top-$(1-\alpha)$ tail average. The closed loop runs through a custom Gym environment \texttt{CVaRLaneChange-v0} that wraps HighwayEnv \cite{leurent2018highway}. All experiments are scripted in \repolink{src/experiments}{src/experiments/}.
+
+\section{Experiment Results}
+\label{sec:results}
+
+\subsection{Simulation Setup}
+
+The ego is a 4-state kinematic bicycle, state $(X, Y, \psi, v)$, control $(a, \delta) \in [-5, 5]\,\mathrm{m/s^2} \times [-\pi/4, \pi/4]\,\mathrm{rad}$. The environment is a three-lane straight highway with 10 surrounding vehicles. Their longitudinal motion follows IDM and their lateral motion follows MOBIL. The simulator runs at 100\,Hz, the controller at 20\,Hz ($\Delta t = 50$\,ms). MPPI uses $M = 256$, $K = 30$, $\Sigma_\epsilon = \mathrm{diag}(1.5^2, 0.08^2)$, $\lambda = 1$. CVaR-MPPI uses the same MPPI parameters plus $\alpha = 0.9$, $N = 64$ disturbed futures, $\sigma_a = 5$\,m/s$^2$, $A = 200$, $C_u = 5$. The running cost $q$ is identical between controllers, so any behavioural difference is attributable purely to the CVaR augmentation.
+
+\textbf{Baseline.} Risk-neutral MPPI \cite{williams2017mppi} with the CVaR augmentation removed. Same sampler, same dynamics, same $q$, same seeds. Paired comparison against the same disturbance stream.
+
+\textbf{Scenarios.}
+\begin{itemize}
+    \item \textbf{Lane Change} ($1 \to 0$): natural traffic, ego commanded to merge left.
+    \item \textbf{Cut-In}: an adjacent-lane vehicle slots 6\,m ahead with $+4$\,m/s relative speed.
+    \item \textbf{Hard-Brake leader}: lead vehicle decelerates at $-10$\,m/s$^2$, 8\,m initial headway, no lane change.
+\end{itemize}
+
+\textbf{Metrics.} ISO-grounded per-run metrics. From ISO 11270 (lane-keeping comfort): peak lateral acceleration $a_{y,\mathrm{peak}}$ and jerk $j_{y,\mathrm{peak}}$. From ISO 17387 (lane-change decision aid): minimum time-to-collision $\mathrm{TTC}_\mathrm{min}$, lane-tracking RMS $e_{y,\mathrm{RMS}}$, and merge time $T_{LC}$. Per-seed crash and near-miss ($\mathrm{TTC} < 1.5$\,s) flags. ISO-quality threshold tuning is deferred. The project focus is CVaR mechanism validation.
+
+\subsection{Head-to-Head: Lane Change (Quantitative)}
+
+Table~\ref{tab:headtohead} reports the paired MPPI vs CVaR-MPPI comparison on the lane-change scenario at a single seed, same sampler. MPPI collided. CVaR-MPPI cleared the same gap. The mechanism is visible in the metric deltas. Lateral acceleration peaks higher (the controller swerves harder), but jerk and lane-tracking RMS both improve substantially. The TTC margin improves by nearly two orders of magnitude. Merge duration is essentially unchanged. The CVaR penalty buys safety with a sharper transient, not a slower merge. Run artefacts at \repolink{for_presentation/comparison_1_lane_change}{for\_presentation/comparison\_1\_lane\_change/}.
+
+\begin{table}[t]
+\centering
+\caption{Paired MPPI vs CVaR-MPPI on the lane-change scenario. Same seed, same sampler. MPPI collided; CVaR-MPPI did not.}
+\label{tab:headtohead}
+\begin{tabular}{lrrr}
+\toprule
+Metric & MPPI & CVaR-MPPI & $\Delta$ \\
+\midrule
+$a_{y,\mathrm{peak}}$\,[m/s$^2$]   & 15.21 & 17.07 & $+12.2\%$ \\
+$j_{y,\mathrm{peak}}$\,[m/s$^3$]   & 95.34 & 68.36 & $-28.3\%$ \\
+$\mathrm{TTC}_\mathrm{min}$\,[s]   & 0.01  & 0.75  & $+98.6\%$ \\
+$e_{y,\mathrm{RMS}}$\,[m]          & 0.762 & 0.219 & $-71.2\%$ \\
+$T_{LC}$\,[s]                      & 0.70  & 0.65  & $-0.05$ \\
+\midrule
+Crash                              & yes   & no    & ---  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Multi-Axis Vehicle-Dynamics Diagnostics}
+\label{sec:diagnostics}
+
+Single-number metrics (crash, $\mathrm{TTC}_\mathrm{min}$) collapse the controller's behaviour. To audit \emph{how} the CVaR-augmented controller drives, I log six per-run plots that together cover trajectory, lane-keeping, comfort, safety, control effort, and the cost-distribution that drives the CVaR estimator. Fig.~\ref{fig:diagnostics} shows them on the hard-brake scenario at high traffic density (seed 2, $M=128$, $K=20$, $-10$\,m/s$^2$ leader deceleration, 8\,m initial headway). This scenario was chosen for the audit because the leader's hazard is scripted (deterministic, large) and the ego must decelerate without an evasive lane change, isolating longitudinal control behaviour from lateral dynamics.
+
+\begin{figure*}[t]
+    \centering
+    \begin{subfigure}{0.32\textwidth}
+        \includegraphics[width=\linewidth]{figs/trajectory_overview.png}
+        \caption{\textbf{Trajectory overview} (top-down). Ego path (yellow) with traffic snapshots at $t=0$ and $t=T_\mathrm{end}$. Confirms the ego held its lane against the braking leader without lateral excursion.}
+        \label{fig:traj}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.32\textwidth}
+        \includegraphics[width=\linewidth]{figs/lateral_profile.png}
+        \caption{\textbf{Lateral profile}: $Y(t)$ vs target lane and $e_y(t)$. Diagnoses whether tail-shaping leaked into lateral oscillation. RMS error stayed within ISO 17387 \emph{acceptable} band (0.094\,m, $\le 0.10$).}
+        \label{fig:lateral}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.32\textwidth}
+        \includegraphics[width=\linewidth]{figs/comfort.png}
+        \caption{\textbf{Comfort (ISO 11270)}: $|a_y|(t)$ and $|j_y|(t)$ with ISO bands. Peak $a_y = 21.6$\,m/s$^2$ exceeds the ISO hard limit. Cost of survival on this aggressive scenario: severe transient, flagged for ride-comfort tuning.}
+        \label{fig:comfort}
+    \end{subfigure}
+
+    \vspace{2mm}
+
+    \begin{subfigure}{0.32\textwidth}
+        \includegraphics[width=\linewidth]{figs/safety.png}
+        \caption{\textbf{Safety (ISO 17387)}: TTC$(t)$ vs the leader. The dip to TTC = 0.42\,s is the exact window where the gated CVaR penalty fires (Fig.~\ref{fig:cvar_activity}). No collision; the planner held headway.}
+        \label{fig:safety}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.32\textwidth}
+        \includegraphics[width=\linewidth]{figs/controls.png}
+        \caption{\textbf{Commanded controls} $a(t), \delta(t)$. Shows the soft-constrained CVaR penalty produces a sharp but bounded deceleration command rather than chattering, validating the smoothness of the augmented cost surface.}
+        \label{fig:controls}
+    \end{subfigure}\hfill
+    \begin{subfigure}{0.32\textwidth}
+        \includegraphics[width=\linewidth]{figs/cost_distribution.png}
+        \caption{\textbf{Rollout cost histogram} at $t = 1.0$\,s, with empirical VaR$_{0.9}$ and CVaR$_{0.9}$ markers. The right tail above VaR is what CVaR re-weights. Visualises the exact distribution the gated penalty operates on.}
+        \label{fig:cost_dist}
+    \end{subfigure}
+    \caption{Vehicle-dynamics audit of CVaR-MPPI on the hard-brake scenario (seed 2). Six diagnostics from a single run cover trajectory, lane-keeping, comfort (ISO 11270), safety (ISO 17387), control smoothness, and the cost distribution underlying the CVaR estimator. Raw run at \repolink{for_presentation/20260601-000348_hard_brake_GOOD_denseTraffic}{for\_presentation/20260601-000348\_hard\_brake\_GOOD\_denseTraffic/}.}
+    \label{fig:diagnostics}
+\end{figure*}
+
+\subsection{Penalty Activity and Runtime}
+
+Fig.~\ref{fig:cvar_activity} plots the CVaR penalty's per-step activity over the entire episode on the lane-change scenario. The top panel is $\max_m \widehat{\mathrm{CVaR}}_\alpha^m$ over time, with the budget $C_u = 5$ marked. The bottom panel is the number of penalised rollouts $|\{m : J_C^m > 0\}|$. Two activity windows stand out: around $t \approx 0$--1\,s (avoiding the leading vehicle and road boundary at merge initiation) and around $t \approx 4.5$\,s (a second leading-vehicle interaction). Between these windows the gate is inactive and CVaR-MPPI behaves identically to MPPI: this is the selective tail shaping the design targets.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.95\columnwidth]{figs/cvar_activity.png}
+    \caption{CVaR penalty activity on the lane-change scenario. Top: $\max_m \widehat{\mathrm{CVaR}}_\alpha^m$ vs time, dashed line marks $C_u = 5$. Bottom: count of penalised rollouts $|\{m: J_C^m > 0\}|$. The penalty fires only when a collision is imminent and stays silent otherwise. Without this trace, identical crash rates under a $C_u$ sweep would have looked like CVaR failing.}
+    \label{fig:cvar_activity}
+\end{figure}
+
+\textbf{Runtime.} 227\,ms per control cycle on an Intel i9-13900KF, $M=256$, $N=64$, $K=30$. Above the 50\,ms real-time budget. Production latency requires GPU vectorisation of the rollout and CVaR estimator (current implementation is pure NumPy). Deferred.
+
+\subsection{Cross-Scenario Comparison}
+\label{sec:cross}
+
+Table~\ref{tab:cross} aggregates CVaR's effect across the three scenarios. Paired runs use a fixed seed; sweep runs aggregate over 10 seeds per controller. Full results CSV at \repolink{sim_output}{sim\_output/}.
+
+\begin{table}[t]
+\centering
+\caption{Cross-scenario comparison of MPPI vs CVaR-MPPI.}
+\label{tab:cross}
+\begin{tabular}{lcccl}
+\toprule
+Scenario & Seeds & MPPI & CVaR & Conclusion \\
+\midrule
+Lane Change (paired) & 1  & crash & no crash & Collision prevented \\
+Hard-Brake (paired)  & 1  & no    & no       & No-regret verified \\
+Cut-In (sweep)       & 10 & 1/10  & 1/10     & Margin gain \\
+Lane Change (sweep)  & 10 & 1/10  & 0/10     & Active risk aversion \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Analysis and Discussion}
+
+\textbf{Hard-brake confirms the no-regret claim.} The scripted hazard ($-10$\,m/s$^2$ leader deceleration) sits outside the support of the zero-mean Gaussian disturbed predictor $\tilde{F}$. The CVaR estimate never exceeds $C_u$, the gate never fires, $J_C \equiv 0$, $\tilde{S}_m = S_m$ bit-for-bit. Both controllers produce identical control sequences and identical outcomes. This is the no-regret property of \S\ref{sec:noregret}, empirically confirmed.
+
+\textbf{Cut-in shows margin without crash-rate change.} On the 10-seed sweep, both controllers crash on the same single seed. On the surviving seeds, CVaR-MPPI buys margin: on seed 2 the minimum inter-vehicle distance grows from 2.19\,m (MPPI) to 4.31\,m (CVaR-MPPI). The penalty is active but the baseline was already safe. This is the regime where CVaR smooths the trajectory without changing the safety verdict.
+
+\textbf{Lane change is where CVaR is decisive.} The paired single-seed result (Table~\ref{tab:headtohead}) is reproduced at scale (1/10 MPPI crashes, 0/10 CVaR crashes). With only 10 seeds this is directional rather than statistically definitive: the 95\% confidence interval on a difference of 1 Bernoulli flip contains zero. The right next step is a larger sweep ($N \ge 100$). The infrastructure in \filelink{src/experiments/compare_controllers.py}{compare\_controllers.py} already supports this.
+
+\textbf{The penalty trades transient sharpness for safety.} The $+12.2\%$ peak lateral acceleration on lane change is not a regression. The MPPI trajectory was about to collide. CVaR-MPPI swerved harder to clear the same gap. The fact that $j_y$ and $e_{y,\mathrm{RMS}}$ both fell is the better diagnostic: the median behaviour improved while the worst-case transient absorbed the safety cost. Fig.~\ref{fig:comfort} shows the analogous trade on hard-brake: the controller survives, but at $a_y = 21.6$\,m/s$^2$ peak. A production tuning would tighten $C_u$ and raise comfort weights to flatten that peak.
+
+\textbf{$C_u$ calibration exposed a design failure mode.} An early sweep across $C_u \in \{0.3, 1, 3\}$ on hard-brake produced identical crash rates. Without the diagnostic logger this would have looked like "CVaR doesn't help." The logger (Fig.~\ref{fig:cvar_activity}) revealed the cause: $\max_m \widehat{\mathrm{CVaR}}$ never exceeded 0.3 either, so the gate never fired regardless of budget. The fix is structural, not parametric: $\tilde{F}$ must span the hazard, otherwise the tail has no mass. The recommendation is to pre-run an unconstrained pilot to inspect the per-step CVaR distribution before setting $C_u$ near its empirical median.
+
+\textbf{Threats to validity.}
+\begin{itemize}
+    \item \textit{Offline $V^*$ not delivered.} Per \S\ref{sec:scope}, the originally proposed offline DP terminal cost was descoped. Results use a quadratic lane-tracking $\phi$. The headline numbers therefore isolate the \emph{online} CVaR augmentation. A full offline+online evaluation is the immediate next step.
+    \item \textit{Disturbed predictor matches simulator predictor.} The IDM/MOBIL noise that $\tilde{F}$ assumes also drives HighwayEnv. This biases CVaR-MPPI favourably. A robustness test with model-class mismatch (heavy-tailed traffic, MOBIL parameter drift) is required for any production claim.
+    \item \textit{Small seed counts.} Table~\ref{tab:headtohead} is one seed; Table~\ref{tab:cross} uses 10. Both are corroborating but undersized for a definitive crash-rate delta.
+\end{itemize}
+
+\section{Conclusion and Future Work}
+\label{sec:conclusion}
+
+This report presented an online soft-constrained CVaR-MPPI controller for highway lane-change planning. The controller is the path-integral DP underlying MPPI, augmented with a gated Monte-Carlo CVaR penalty that turns the original constrained problem~(\ref{eq:obj})--(\ref{eq:cvar}) into a tractable unconstrained MPPI objective. The originally proposed offline CVaR-MDP value iteration was descoped due to compute and time constraints (\S\ref{sec:scope}); its algorithmic specification is preserved in \S\ref{sec:offline_planned} as the recommended bridge to a full hybrid system. The online component is fully implemented and evaluated. It prevents a collision on the lane-change scenario where MPPI fails (TTC $0.01 \to 0.75$\,s, $e_{y,\mathrm{RMS}}$ down 71\%), and matches MPPI bit-for-bit when no tail is present (no-regret, \S\ref{sec:noregret}). The multi-axis diagnostic suite (Fig.~\ref{fig:diagnostics}) audits the controller against ISO 11270 and ISO 17387 thresholds rather than a single crash metric.
+
+\textbf{Lessons.} (1) CVaR helps only when $\tilde{F}$ spans the hazard: the dominant design lever is the disturbed predictor, not $\alpha$ or $C_u$. (2) The diagnostic logger is essential. Without it, "the gate is silent" and "the gate fires uselessly" look identical at the CSV level. (3) Soft-constrained CVaR is the right first deployment: it cannot go infeasible, and the no-regret property gives a clean fallback to MPPI when the tail is absent.
+
+\textbf{Future work.} (i) Run Chow's offline value iteration to convergence on a CPU cluster, load $V^*$ as the MPPI terminal cost, and re-evaluate the same three scenarios. (ii) Port the rollout and CVaR loops to JAX/CUDA for sub-100\,ms cycle latency. (iii) Replace the soft gate with a hard-constrained CVaR (Chow's confidence-set construction), and scale the head-to-head sweep to $N \ge 100$ seeds for a statistically defensible crash-rate delta.
+
+All code, run artefacts, and diagnostic CSVs are published at \href{\repoBase}{\texttt{github.com/USERNAME/mppi-cvar-lane-change-project}} for reproducibility.
+
+\begin{thebibliography}{9}
+
+\bibitem{williams2017mppi}
+G.~Williams, A.~Aldrich, and E.~A.~Theodorou,
+``Model Predictive Path Integral Control: From Theory to Parallel Computation,''
+\emph{J. Guid. Control Dyn.}, vol.~40, no.~2, pp. 344--357, 2017.
+
+\bibitem{rockafellar2000cvar}
+R.~T.~Rockafellar and S.~Uryasev,
+``Optimization of Conditional Value-at-Risk,''
+\emph{J. Risk}, vol.~2, no.~3, pp. 21--41, 2000.
+
+\bibitem{chow2014cvar}
+Y.~Chow and M.~Ghavamzadeh,
+``Algorithms for CVaR Optimization in MDPs,''
+in \emph{Advances in Neural Information Processing Systems (NeurIPS)}, vol.~27, 2014.
+
+\bibitem{chow2015risk}
+Y.~Chow, A.~Tamar, S.~Mannor, and M.~Pavone,
+``Risk-Sensitive and Robust Decision-Making: A CVaR Optimization Approach,''
+in \emph{Advances in Neural Information Processing Systems (NeurIPS)}, vol.~28, 2015.
+
+\bibitem{yin2022ra}
+J.~Yin, Z.~Zhang, and P.~Tsiotras,
+``Risk-Aware Model Predictive Path Integral Control Using Conditional Value-at-Risk,''
+\emph{arXiv:2209.12842}, 2022.
+
+\bibitem{leurent2018highway}
+E.~Leurent,
+``An Environment for Autonomous Driving Decision-Making,''
+\url{https://github.com/Farama-Foundation/HighwayEnv}, 2018.
+
+\end{thebibliography}
+
+\end{document}
